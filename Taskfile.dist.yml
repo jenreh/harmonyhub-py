@@ -85,49 +85,6 @@ tasks:
       - find . -type f -name "*.pyc" -delete
 
   # ----------------------------------------------------------------------------
-  # Database Commands (Namespace: db)
-  # ----------------------------------------------------------------------------
-
-  db:revision:
-    desc: |
-      Create new Alembic migration (Usage: task db:revision -- "your message here")
-    cmds:
-      - '{{.RUNNER}} alembic revision -m "{{.CLI_ARGS}}"'
-
-  db:current:
-    desc: Run alembic current (check migration status)
-    cmd: "{{.RUNNER}} alembic current"
-
-  db:history:
-    desc: Show alembic migration history
-    cmd: "{{.RUNNER}} alembic history"
-
-  db:upgrade:
-    desc: Run alembic upgrade head
-    cmd: "{{.RUNNER}} alembic upgrade head"
-
-  db:downgrade:
-    desc: Downgrade database by one revision
-    cmd: "{{.RUNNER}} alembic downgrade -1"
-
-  # ----------------------------------------------------------------------------
-  # Docker Commands (Namespace: docker)
-  # ----------------------------------------------------------------------------
-
-  docker:build:
-    desc: Build Docker image locally
-    cmds:
-      - echo "🔨 Building Docker image {{.IMAGE_NAME}}:latest"
-      - docker build -t {{.IMAGE_NAME}}:latest .
-      - echo "✅ Docker image built successfully"
-
-  docker:test:
-    desc: Run and verify locally built image
-    cmds:
-      - echo "🧪 Testing locally built image {{.IMAGE_NAME}}:latest"
-      - docker compose up --build --watch
-
-  # ----------------------------------------------------------------------------
   # Release Commands
   # ----------------------------------------------------------------------------
 
