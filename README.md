@@ -15,9 +15,8 @@ pip install -e .                 # or plain pip from the repo root
 pip install -e .[dev]            # plus ruff / mypy / pytest
 ```
 
-Python ≥ 3.11 is required (the package uses `tomllib` from the standard
-library and PEP 604 union syntax in type annotations). A pinned 3.14
-interpreter is used by the repo's `uv.lock` and `.python-version`.
+Python ≥ 3.14 is required (declared in `pyproject.toml`; matches the pinned
+interpreter in `uv.lock` and `.python-version`).
 
 ## Quick start (library)
 
@@ -53,10 +52,11 @@ harmony activities list
 harmony activities start "Watch TV"
 harmony key volume-up
 harmony key mute
-harmony channel set 101
+harmony key digit 5
+harmony channel 101
 harmony status
 harmony doctor                          # end-to-end diagnostic
-harmony discover                        # placeholder (not in MVP)
+harmony discover                        # find Harmony Hubs
 ```
 
 All read commands accept `--json` for machine-readable output. All logs go to
@@ -77,7 +77,14 @@ Every command resolves the hub host from (in order) `--host`, the
 | `harmony listen [--json]`                                        | Stream spontaneous hub events to stdout until Ctrl+C.                                      |
 | `harmony send --device DEV --command CMD [--hold-ms N] [--json]` | Send a raw IR command name to a specific device. Bypasses logical-key routing and aliases. |
 | `harmony doctor`                                                 | End-to-end diagnostic: host reachability → port 8088 → provisioning → WebSocket → config.  |
-| `harmony discover`                                               | Placeholder (not in MVP). Use `--host` or `HARMONY_HUB_HOST`.                              |
+| `harmony discover [--name N] [--id ID] [--timeout S] [--json]`   | Find hubs on the LAN via SSDP M-SEARCH and a parallel /24 port scan.                       |
+| `harmony channel <n> [--device DEV] [--json]`                    | Switch channels. `digits_then_enter` (default) or native `change_channel` per config.      |
+| `harmony activities list/current/start …`                        | List, query, or switch activities (list, current, start).                                  |
+| `harmony devices list/commands …`                                | List all devices and their IR commands (list, commands).                                   |
+| `harmony device power-on/off <device>`                           | Power a single device on or off (power-on, power-off).                                     |
+| `harmony key volume-up/down/mute/ok/back/digit …`                | Send a logical key with automatic routing (volume, channel, ok, back, digit).              |
+| `harmony config pull/show/diff …`                                | Fetch, display, or diff the hub config (pull, show, diff).                                 |
+| `harmony sequence list/run …`                                    | List and fire hub-defined macro sequences (list, run).                                     |
 
 #### Activities — `harmony activities ...`
 
@@ -89,10 +96,13 @@ Every command resolves the hub host from (in order) `--host`, the
 
 #### Devices — `harmony devices ...`
 
-| Subcommand          | Purpose                                                                                           |
-| ------------------- | ------------------------------------------------------------------------------------------------- |
-| `list [--json]`     | All devices: ID, label, manufacturer, command count.                                              |
-| `commands <device>` | List every command name available on a device (matched by id, exact label, or unique substring).  |
+| Subcommand                                           | Purpose                                                                                  |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `list [--type KIND] [--json]`                        | All devices: ID, label, kind, manufacturer, command count. `--type` filters by kind.     |
+| `commands <device> [--group G] [--grouped] [--json]` | List commands; `--grouped` groups by control group, `--group <name>` restricts to one.   |
+
+Recognised `--type` values: `television`, `avreceiver`, `speaker`, `stb`, `game`,
+`appletv`, `other`.
 
 #### Single-device shortcuts — `harmony device ...`
 
@@ -119,17 +129,36 @@ that owns the command, or fails with an ambiguity error.
 | `back`           | `navigation_device`                              | Alias chain: `Back` → `Return` → `Exit` → `PreviousMenu` → `DirectionBack`. |
 | `digit <0-9>`    | `number_device` (falls back to `channel_device`) | Sends `Number0`…`Number9` (or `0`…`9`, depending on hub config).            |
 
-#### Channel control — `harmony channel ...`
+`harmony key digit 5` is the canonical form; `harmony key 5` is not exposed
+— digits go through the `digit` subcommand.
 
-| Subcommand                       | Purpose                                                                                                                                                  |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `set <channel> [--device DEV]`   | Switch channels. In `digits_then_enter` mode, presses each digit then `Enter`; in `change_channel` mode, fires the hub's native `changeChannel` command. |
+#### Channel control — `harmony channel`
+
+`harmony channel <number> [--device DEV] [--json]`
+
+Switch channels. In `digits_then_enter` mode, presses each digit then `Enter`;
+in `change_channel` mode, fires the hub's native `changeChannel` command. The
+target device is taken from `[activity_routes].channel_device` for the active
+activity, or auto-resolved. Pass `--device` to override.
 
 #### Hub-config helpers — `harmony config ...`
 
-| Subcommand            | Purpose                                                                              |
-| --------------------- | ------------------------------------------------------------------------------------ |
-| `pull [--out PATH]`   | Fetch the raw hub config and write it as JSON (stdout when `--out` omitted).         |
+- `pull [--out PATH]` — fetch the raw hub config and write it as JSON
+  (stdout when `--out` omitted).
+- `show [--json]` — parsed summary: version, locale, devices (kind,
+  capabilities, control groups), activities (roles), sequences.
+- `diff [--json]` — compare the on-disk cached config to a fresh pull;
+  surfaces added/removed devices, activities, commands, and `configVersion`
+  bumps.
+
+#### Sequences — `harmony sequence ...`
+
+Hub-defined macros (multi-step IR runs configured in the Harmony app):
+
+| Subcommand          | Purpose                                                            |
+| ------------------- | ------------------------------------------------------------------ |
+| `list [--json]`     | List sequences with ID, label, and step count.                     |
+| `run <sequence-id>` | Fire every step in order. Reports per-step success / failure rows. |
 
 ### Shell completions (zsh)
 
@@ -217,17 +246,46 @@ Recognised environment variables: `HARMONY_HUB_HOST`, `HARMONY_PROTOCOL`,
 }
 ```
 
-Tools exposed: `harmony_get_status`, `harmony_list_activities`,
-`harmony_start_activity`, `harmony_power_off`, `harmony_list_devices`,
-`harmony_list_device_commands`, `harmony_device_power_on`,
-`harmony_device_power_off`, `harmony_send_key`, `harmony_send_command`,
-`harmony_set_channel`, `harmony_refresh_config`.
+Tools exposed:
+
+- `harmony_get_status` — current activity, last channel, connection state.
+- `harmony_list_activities`, `harmony_start_activity`, `harmony_power_off`.
+- `harmony_list_devices`, `harmony_list_device_commands`.
+- `harmony_device_power_on`, `harmony_device_power_off`.
+- `harmony_send_key` — typed `LogicalKey` (volume/channel up-down, digits,
+  ok, enter, back, off). Routing falls back to TOML `activity_routes`, then
+  auto-resolution.
+- `harmony_send_command` — raw IR command on a device (for vendor-specific
+  buttons not covered by `send_key`).
+- `harmony_set_channel` — `digits_then_enter` or native `change_channel`.
+- `harmony_refresh_config` — re-fetch and replace the cached config.
 
 Resources exposed: `harmony://config`, `harmony://activities`,
 `harmony://devices`, `harmony://status`.
 
 The server never logs to stdout (that would corrupt the MCP framing) and does
 not return raw account IDs or unredacted email addresses.
+
+## Natural-language skill
+
+A drop-in skill for Claude Code / Claude Desktop lives at
+[`skill/harmonyhub/SKILL.md`](skill/harmonyhub/SKILL.md). It teaches the
+model to translate voice-style requests (*"schalte Pro7 ein"*, *"lauter"*,
+*"alles aus"*) into the matching MCP tool calls or CLI invocations.
+
+Highlights:
+
+- Hard rule: channel requests are only valid when the active activity is
+  `Fernsehen`. The skill checks `harmony_get_status` first and starts the
+  activity if needed before calling `harmony_set_channel`.
+- Channel-name → number map (ARD=1, ZDF=2, RTL=3, Sat1=4, Pro7=5, …).
+- Activity aliases for this hub: `Fernsehen`, `Apple TV sehen`,
+  `Musik hören`, `TV`, `PowerOff`.
+- Volume / mute / OK / Back / channel ±/digit routing tables.
+- Replies in the user's language in one short sentence — no tool names, no
+  JSON.
+
+See [`docs/skill.md`](docs/skill.md) for installation notes.
 
 ## What the library will *not* tell you
 
