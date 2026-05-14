@@ -1,0 +1,23 @@
+{
+    "permissions": {
+        "defaultMode": "acceptEdits",
+        "allow": [
+            "Bash(python)",
+            "Bash(python *)",
+            "Bash(python3)",
+            "Bash(python3 *)",
+            "Bash(pytest)",
+            "Bash(pytest *)",
+            "Bash(pip)",
+            "Bash(pip *)",
+            "Bash(pip3)",
+            "Bash(pip3 *)",
+            "Bash(uv)",
+            "Bash(uv *)",
+            "Bash(poetry)",
+            "Bash(poetry *)",
+            "Bash(git stash *)",
+            "Bash(task *)"
+        ]
+    }
+}

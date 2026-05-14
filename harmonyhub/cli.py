@@ -35,12 +35,14 @@ devices_app = typer.Typer(help="Device operations", no_args_is_help=True)
 device_app = typer.Typer(help="Single-device shortcuts", no_args_is_help=True)
 key_app = typer.Typer(help="Logical key dispatch", no_args_is_help=True)
 config_app = typer.Typer(help="Hub-configuration helpers", no_args_is_help=True)
+sequence_app = typer.Typer(help="Hub macro sequences", no_args_is_help=True)
 
 app.add_typer(activities_app, name="activities")
 app.add_typer(devices_app, name="devices")
 app.add_typer(device_app, name="device")
 app.add_typer(key_app, name="key")
 app.add_typer(config_app, name="config")
+app.add_typer(sequence_app, name="sequence")
 
 _stderr = Console(stderr=True)
 _stdout = Console()
@@ -291,10 +293,21 @@ def activities_list(
         table = Table(title="Activities")
         table.add_column("ID")
         table.add_column("Label")
+        table.add_column("Type")
+        table.add_column("Volume")
+        table.add_column("Channel")
+        table.add_column("Display")
         table.add_column("Power-off")
         for activity in items:
+            roles = activity.roles
             table.add_row(
-                activity.id, activity.label, "yes" if activity.is_power_off else ""
+                activity.id,
+                activity.label,
+                activity.type or "-",
+                roles.volume_device_id or "-",
+                roles.channel_device_id or "-",
+                roles.display_device_id or "-",
+                "yes" if activity.is_power_off else "",
             )
         _stdout.print(table)
 
@@ -343,22 +356,33 @@ def activities_start(
 @devices_app.command("list")
 def devices_list(
     host: str | None = typer.Option(None, "--host"),
+    kind: str | None = typer.Option(
+        None,
+        "--type",
+        "--kind",
+        help="Filter by normalised kind: television, avreceiver, speaker, stb, game, appletv, other.",
+    ),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     async def _go() -> None:
         async with HarmonyService(host) as service:
-            items = await service.client.list_devices()
+            items = await service.client.list_devices(kind=kind)
         if json_out:
             _emit_json(items)
             return
         table = Table(title="Devices")
         table.add_column("ID")
         table.add_column("Label")
+        table.add_column("Kind")
         table.add_column("Manufacturer")
         table.add_column("Commands")
         for dev in items:
             table.add_row(
-                dev.id, dev.label, dev.manufacturer or "-", str(len(dev.commands))
+                dev.id,
+                dev.label,
+                dev.kind or "-",
+                dev.manufacturer or "-",
+                str(len(dev.commands)),
             )
         _stdout.print(table)
 
@@ -369,16 +393,46 @@ def devices_list(
 def devices_commands(
     device: str = typer.Argument(...),
     host: str | None = typer.Option(None, "--host"),
+    group: str | None = typer.Option(
+        None, "--group", help="Restrict output to a single control group (e.g. Volume)."
+    ),
+    grouped: bool = typer.Option(
+        False, "--grouped", help="Print commands grouped by control group."
+    ),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     async def _go() -> None:
         async with HarmonyService(host) as service:
+            groups = await service.client.list_device_command_groups(device)
             commands = await service.client.list_device_commands(device)
         if json_out:
-            _emit_json(commands)
-        else:
-            for command in commands:
-                _stdout.print(command)
+            if grouped or group is not None:
+                payload = {
+                    k: list(v)
+                    for k, v in groups.items()
+                    if group is None or k.casefold() == group.casefold()
+                }
+                _emit_json(payload)
+            else:
+                _emit_json(commands)
+            return
+        if group is not None:
+            wanted = group.casefold()
+            for name, cmds in groups.items():
+                if name.casefold() == wanted:
+                    for command in cmds:
+                        _stdout.print(command)
+                    return
+            _stderr.print(f"[yellow]No group {group!r} on device.[/yellow]")
+            return
+        if grouped:
+            for name, cmds in groups.items():
+                _stdout.print(f"[bold]{name}[/bold]")
+                for command in cmds:
+                    _stdout.print(f"  {command}")
+            return
+        for command in commands:
+            _stdout.print(command)
 
     _run(_go())
 
@@ -506,6 +560,202 @@ def config_pull(
             _stdout.print_json(payload)
         else:
             out.write_text(payload + "\n", encoding="utf-8")
+
+    _run(_go())
+
+
+@config_app.command("show")
+def config_show(
+    host: str | None = typer.Option(None, "--host"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Show a parsed summary of the hub configuration."""
+
+    async def _go() -> None:
+        async with HarmonyService(host) as service:
+            config = await service.client.get_config()
+        if json_out:
+            _emit_json(
+                {
+                    "config_version": config.config_version,
+                    "locale": config.locale,
+                    "activities": list(config.activities),
+                    "devices": list(config.devices),
+                    "sequences": list(config.sequences),
+                    "content": config.content,
+                }
+            )
+            return
+        _stdout.print(
+            f"[bold]Config version:[/bold] {config.config_version or '-'}  "
+            f"[bold]Locale:[/bold] {config.locale or '-'}"
+        )
+        dev_table = Table(title="Devices")
+        for col in ("ID", "Label", "Kind", "Manufacturer", "Capabilities", "Groups"):
+            dev_table.add_column(col)
+        for dev in config.devices:
+            dev_table.add_row(
+                dev.id,
+                dev.label,
+                dev.kind or "-",
+                dev.manufacturer or "-",
+                ", ".join(dev.capability_labels) or "-",
+                ", ".join(dev.command_groups) or "-",
+            )
+        _stdout.print(dev_table)
+        act_table = Table(title="Activities")
+        for col in ("ID", "Label", "Type", "Volume", "Channel", "Display"):
+            act_table.add_column(col)
+        for activity in config.activities:
+            roles = activity.roles
+            act_table.add_row(
+                activity.id,
+                activity.label,
+                activity.type or "-",
+                roles.volume_device_id or "-",
+                roles.channel_device_id or "-",
+                roles.display_device_id or "-",
+            )
+        _stdout.print(act_table)
+        if config.sequences:
+            _stdout.print(
+                f"[bold]Sequences:[/bold] {len(config.sequences)} "
+                f"({', '.join(s.label for s in config.sequences)})"
+            )
+
+    _run(_go())
+
+
+@config_app.command("diff")
+def config_diff(
+    host: str | None = typer.Option(None, "--host"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Compare on-disk cached config to a freshly pulled one."""
+    from harmonyhub.cache import hub_cache_dir, read_json
+    from harmonyhub.parser import parse_config
+
+    async def _go() -> None:
+        async with HarmonyService(host) as service:
+            await service.client.connect()
+            provision = service.client._provision  # noqa: SLF001
+            cached_raw = None
+            if provision is not None:
+                cached_entry = read_json(
+                    hub_cache_dir(provision.remote_id) / "config.json"
+                )
+                if isinstance(cached_entry, dict):
+                    cached_raw = cached_entry.get("data")
+            fresh = await service.client.get_config(refresh=True)
+        cached = parse_config(cached_raw) if isinstance(cached_raw, dict) else None
+        diff = _config_diff(cached, fresh)
+        if json_out:
+            _emit_json(diff)
+            return
+        if not any(diff.values()):
+            _stdout.print("[green]No differences.[/green]")
+            return
+        for section, entries in diff.items():
+            if not entries:
+                continue
+            _stdout.print(f"[bold]{section}[/bold]")
+            for entry in entries:
+                _stdout.print(f"  {entry}")
+
+    _run(_go())
+
+
+def _config_diff(cached: Any, fresh: Any) -> dict[str, list[str]]:
+    cached_devices = {d.id: d for d in cached.devices} if cached else {}
+    fresh_devices = {d.id: d for d in fresh.devices}
+    cached_activities = {a.id: a for a in cached.activities} if cached else {}
+    fresh_activities = {a.id: a for a in fresh.activities}
+
+    added_devices = [
+        f"+ {d.label} ({d.id})"
+        for did, d in fresh_devices.items()
+        if did not in cached_devices
+    ]
+    removed_devices = [
+        f"- {d.label} ({d.id})"
+        for did, d in cached_devices.items()
+        if did not in fresh_devices
+    ]
+    added_activities = [
+        f"+ {a.label} ({a.id})"
+        for aid, a in fresh_activities.items()
+        if aid not in cached_activities
+    ]
+    removed_activities = [
+        f"- {a.label} ({a.id})"
+        for aid, a in cached_activities.items()
+        if aid not in fresh_activities
+    ]
+    command_changes: list[str] = []
+    for did, dev in fresh_devices.items():
+        if did not in cached_devices:
+            continue
+        cached_dev = cached_devices[did]
+        added = set(dev.commands) - set(cached_dev.commands)
+        removed = set(cached_dev.commands) - set(dev.commands)
+        command_changes.extend(f"+ {dev.label}: {cmd}" for cmd in sorted(added))
+        command_changes.extend(f"- {dev.label}: {cmd}" for cmd in sorted(removed))
+    version_changes: list[str] = []
+    if cached is not None and cached.config_version != fresh.config_version:
+        version_changes.append(
+            f"configVersion: {cached.config_version} → {fresh.config_version}"
+        )
+    return {
+        "configVersion": version_changes,
+        "devices": added_devices + removed_devices,
+        "activities": added_activities + removed_activities,
+        "commands": command_changes,
+    }
+
+
+# --------------------------------------------------------------------- sequences
+
+
+@sequence_app.command("list")
+def sequence_list(
+    host: str | None = typer.Option(None, "--host"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    async def _go() -> None:
+        async with HarmonyService(host) as service:
+            items = await service.client.list_sequences()
+        if json_out:
+            _emit_json(items)
+            return
+        if not items:
+            _stdout.print("[yellow]No sequences configured on this hub.[/yellow]")
+            return
+        table = Table(title="Sequences")
+        table.add_column("ID")
+        table.add_column("Label")
+        table.add_column("Actions")
+        for seq in items:
+            table.add_row(seq.id, seq.label, str(len(seq.actions)))
+        _stdout.print(table)
+
+    _run(_go())
+
+
+@sequence_app.command("run")
+def sequence_run(
+    sequence_id: str = typer.Argument(...),
+    host: str | None = typer.Option(None, "--host"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    async def _go() -> None:
+        async with HarmonyService(host) as service:
+            results = await service.client.run_sequence(sequence_id)
+        if json_out:
+            _emit_json(results)
+            return
+        for result in results:
+            status = "[green]ok[/green]" if result.success else "[red]fail[/red]"
+            _stdout.print(f"{status} {result.device_id} {result.command}")
 
     _run(_go())
 

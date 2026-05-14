@@ -34,7 +34,9 @@ from harmonyhub.models import (
     HubInfo,
     HubStatus,
     LogicalKey,
+    PowerAction,
 )
+from harmonyhub.parser import parse_config as _parse_hub_config
 from harmonyhub.protocol.http import ProvisionInfo, fetch_provision_info
 from harmonyhub.protocol.websocket import WebSocketTransport
 from harmonyhub.status import RuntimeState, load_state, save_state
@@ -155,6 +157,11 @@ class HarmonyHubClient:
         if self._config is not None and not refresh:
             return self._config
         transport = self._require_transport()
+        if not refresh and self._provision is not None:
+            cached = await self._try_cached_config(transport)
+            if cached is not None:
+                self._config = cached
+                return cached
         body = await transport.request(_CMD_CONFIG)
         data = body.get("data") or {}
         config = _parse_config(data)
@@ -167,17 +174,84 @@ class HarmonyHubClient:
                 _LOG.warning("Failed to write config cache: %s", exc)
         return config
 
+    async def _try_cached_config(
+        self, transport: WebSocketTransport
+    ) -> HubConfig | None:
+        if self._provision is None:
+            return None
+        cached_entry = _read_cached_config(self._provision.remote_id)
+        if not isinstance(cached_entry, dict):
+            return None
+        cached_data = cached_entry.get("data")
+        if not isinstance(cached_data, dict):
+            cached_data = cached_entry
+        cached_version = cached_data.get("configVersion")
+        if not isinstance(cached_version, int):
+            return None
+        try:
+            digest_body = await transport.request(_CMD_STATE_DIGEST)
+        except (ProtocolError, HubUnavailableError):
+            return None
+        digest_data = digest_body.get("data") or {}
+        live_version = digest_data.get("configVersion")
+        if live_version != cached_version:
+            return None
+        _LOG.debug("Using cached config (version %d)", cached_version)
+        return _parse_config(cached_data)
+
     async def list_activities(self) -> list[Activity]:
         config = await self.get_config()
-        return list(config.activities)
+        return sorted(config.activities, key=_activity_sort_key)
 
-    async def list_devices(self) -> list[Device]:
+    async def list_devices(self, kind: str | None = None) -> list[Device]:
         config = await self.get_config()
-        return list(config.devices)
+        if kind is None:
+            return list(config.devices)
+        wanted = kind.lower()
+        return [d for d in config.devices if (d.kind or "") == wanted]
 
     async def list_device_commands(self, device: str | int) -> list[str]:
         dev = await self._resolve_device(device)
         return list(dev.commands)
+
+    async def list_device_command_groups(
+        self, device: str | int
+    ) -> dict[str, tuple[str, ...]]:
+        dev = await self._resolve_device(device)
+        return dict(dev.command_groups)
+
+    async def list_sequences(self) -> list[Any]:
+        config = await self.get_config()
+        return list(config.sequences)
+
+    async def run_sequence(self, sequence_id: str) -> list[CommandResult]:
+        config = await self.get_config()
+        target = next((s for s in config.sequences if s.id == sequence_id), None)
+        if target is None:
+            raise HarmonyHubError(
+                f"Sequence {sequence_id!r} not found. "
+                f"Known: {[s.id for s in config.sequences]}"
+            )
+        results: list[CommandResult] = []
+        for action in target.actions:
+            if action.command and action.device_id:
+                result = await self.send_command(
+                    action.device_id,
+                    action.command,
+                    hold_ms=action.delay_ms or 0,
+                )
+                results.append(result)
+                if not result.success:
+                    break
+            elif action.delay_ms:
+                await asyncio.sleep(action.delay_ms / 1000.0)
+        return results
+
+    async def content_image_url(self, station_id: str) -> str | None:
+        config = await self.get_config()
+        if config.content is None or not config.content.image_host:
+            return None
+        return config.content.image_host.replace("{stationId}", str(station_id))
 
     # ------------------------------------------------------------------- status
 
@@ -239,6 +313,17 @@ class HarmonyHubClient:
 
     async def device_power_on(self, device: str | int) -> CommandResult:
         dev = await self._resolve_device(device)
+        if dev.is_manual_power:
+            return CommandResult(
+                device_id=dev.id,
+                command="PowerOn",
+                success=False,
+                error=f"{dev.label!r} is marked isManualPower; hub cannot power it on",
+            )
+        if dev.power_features and dev.power_features.on:
+            return await self._run_power_sequence(
+                dev, dev.power_features.on, fallback_label="PowerOn"
+            )
         chain = (
             aliases.candidates_for("power_on_fallback")
             if self._app_config.power_on_fallback_toggle
@@ -254,6 +339,17 @@ class HarmonyHubClient:
 
     async def device_power_off(self, device: str | int) -> CommandResult:
         dev = await self._resolve_device(device)
+        if dev.is_manual_power:
+            return CommandResult(
+                device_id=dev.id,
+                command="PowerOff",
+                success=False,
+                error=f"{dev.label!r} is marked isManualPower; hub cannot power it off",
+            )
+        if dev.power_features and dev.power_features.off:
+            return await self._run_power_sequence(
+                dev, dev.power_features.off, fallback_label="PowerOff"
+            )
         try:
             command = _first_present(aliases.candidates_for("power_off"), dev.commands)
         except CommandNotFoundError as exc:
@@ -261,6 +357,41 @@ class HarmonyHubClient:
                 device_id=dev.id, command="PowerOff", success=False, error=str(exc)
             )
         return await self.send_command(dev.id, command)
+
+    async def _run_power_sequence(
+        self,
+        dev: Device,
+        actions: tuple[PowerAction, ...],
+        *,
+        fallback_label: str,
+    ) -> CommandResult:
+        last: CommandResult | None = None
+        for action in actions:
+            command = action.command
+            if not command:
+                if action.duration_ms:
+                    await asyncio.sleep(action.duration_ms / 1000.0)
+                continue
+            if command not in dev.commands:
+                _LOG.info(
+                    "powerFeatures references unknown command %r on %s; skipping",
+                    command,
+                    dev.label,
+                )
+                continue
+            last = await self.send_command(
+                dev.id, command, hold_ms=action.duration_ms or 0
+            )
+            if not last.success:
+                return last
+        if last is None:
+            return CommandResult(
+                device_id=dev.id,
+                command=fallback_label,
+                success=False,
+                error="powerFeatures sequence resolved to no executable action",
+            )
+        return last
 
     # ----------------------------------------------------------------- commands
 
@@ -500,6 +631,25 @@ class HarmonyHubClient:
                 return activity.label
         return None
 
+    async def _resolve_active_activity(self, activity: str | None) -> Activity | None:
+        try:
+            config = await self.get_config()
+        except (ProtocolError, HubUnavailableError):
+            return None
+        if activity:
+            try:
+                return await self._resolve_activity(activity)
+            except HarmonyHubError:
+                return None
+        try:
+            current = await self.get_current_activity()
+        except (ProtocolError, HubUnavailableError):
+            return None
+        for cand in config.activities:
+            if cand.id == current.activity_id:
+                return cand
+        return None
+
     async def _route_for_key(
         self,
         key: LogicalKey | str,
@@ -510,21 +660,39 @@ class HarmonyHubClient:
         if device is not None:
             return await self._resolve_device(device)
 
-        active_label = activity
-        if active_label is None:
-            try:
-                current = await self.get_current_activity()
-                active_label = current.activity_label
-            except (ProtocolError, HubUnavailableError):
-                active_label = None
+        active = await self._resolve_active_activity(activity)
+        active_label = active.label if active is not None else None
 
         route = self._app_config.activity_routes.get(active_label or "")
         configured = _route_device_for_key(route, key)
         if configured:
             return await self._resolve_device(configured)
 
+        if active is not None:
+            role_device_id = _role_device_for_key(active, key)
+            if role_device_id:
+                try:
+                    return await self._resolve_device(role_device_id)
+                except HarmonyHubError:
+                    pass
+
         config = await self.get_config()
         chain = aliases.candidates_for(key) or (str(key),)
+
+        if active is not None and active.control_groups:
+            allowed = {c for cmds in active.control_groups.values() for c in cmds}
+            scoped = [
+                d
+                for d in config.devices
+                if any(c in allowed and c in d.commands for c in chain)
+            ]
+            if len(scoped) == 1:
+                return scoped[0]
+            if scoped:
+                raise AmbiguousRoutingError(
+                    key=str(key), candidates=[d.label for d in scoped]
+                )
+
         candidates = [d for d in config.devices if any(c in d.commands for c in chain)]
         if len(candidates) == 1:
             return candidates[0]
@@ -555,6 +723,25 @@ def _route_device_for_key(route: object, key: str) -> str | None:
     return None
 
 
+def _role_device_for_key(activity: Activity, key: str) -> str | None:
+    roles = activity.roles
+    if key in ("volume_up", "volume_down", "mute"):
+        return roles.volume_device_id
+    if key in ("channel_up", "channel_down") or key.startswith("digit_"):
+        return roles.channel_device_id
+    if key in ("ok", "enter", "back"):
+        return roles.display_device_id or roles.channel_device_id
+    return None
+
+
+def _activity_sort_key(activity: Activity) -> tuple[int, int, str]:
+    if activity.is_power_off:
+        return (2, 0, activity.label)
+    if activity.order is None:
+        return (1, 0, activity.label)
+    return (0, activity.order, activity.label)
+
+
 def _first_present(chain: tuple[str, ...], available: tuple[str, ...]) -> str:
     pool = set(available)
     for candidate in chain:
@@ -564,74 +751,8 @@ def _first_present(chain: tuple[str, ...], available: tuple[str, ...]) -> str:
 
 
 def _parse_config(data: dict[str, Any]) -> HubConfig:
-    activities: list[Activity] = []
-    for item in data.get("activity") or []:
-        if not isinstance(item, dict):
-            continue
-        aid = str(item.get("id", ""))
-        if not aid:
-            continue
-        activities.append(
-            Activity(
-                id=aid,
-                label=str(item.get("label") or aid),
-                is_power_off=aid == _POWER_OFF_ID,
-            )
-        )
-
-    raw_devices = data.get("device") or []
-    devices: list[Device] = []
-    for item in raw_devices:
-        if not isinstance(item, dict):
-            continue
-        device_id = str(item.get("id", ""))
-        if not device_id:
-            continue
-        commands: list[str] = []
-        command_actions: dict[str, str] = {}
-        for group in item.get("controlGroup") or []:
-            if not isinstance(group, dict):
-                continue
-            for func in group.get("function") or []:
-                if not isinstance(func, dict):
-                    continue
-                name = func.get("name")
-                if not name:
-                    continue
-                name_str = str(name)
-                commands.append(name_str)
-                action_raw = func.get("action")
-                if isinstance(action_raw, str):
-                    try:
-                        action_obj = _json.loads(action_raw)
-                    except (ValueError, TypeError):
-                        continue
-                    ir_cmd = (
-                        action_obj.get("command")
-                        if isinstance(action_obj, dict)
-                        else None
-                    )
-                    if ir_cmd:
-                        command_actions[name_str] = str(ir_cmd)
-        devices.append(
-            Device(
-                id=device_id,
-                label=str(item.get("label") or device_id),
-                manufacturer=item.get("manufacturer"),
-                model=item.get("model"),
-                commands=tuple(dict.fromkeys(commands)),
-                command_actions=command_actions,
-            )
-        )
-
-    return HubConfig(
-        activities=tuple(activities),
-        devices=tuple(devices),
-        config_version=data.get("configVersion")
-        if isinstance(data.get("configVersion"), int)
-        else None,
-        raw=data,
-    )
+    """Backwards-compatible shim. Use :func:`harmonyhub.parser.parse_config`."""
+    return _parse_hub_config(data)
 
 
 __all__ = ["HarmonyHubClient"]

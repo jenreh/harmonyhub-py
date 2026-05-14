@@ -28,5 +28,13 @@
                 "duckduckgo-mcp-server"
             ]
         },
+        "harmony": {
+            "command": "uv",
+            "args": [
+                "run",
+                "harmony-mcp"
+            ],
+            "cwd": "/Users/jens/Workspace/projekte/harmonyhub-py"
+        }
     }
 }
