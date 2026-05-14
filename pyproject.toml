@@ -22,7 +22,6 @@ dependencies = [
     "pydantic==2.13.4",
     "fastmcp==3.2.4",
     "python-dotenv==1.2.2",
-
 ]
 
 [project.optional-dependencies]
@@ -173,6 +172,7 @@ known-first-party = ["appkit_*"]
 cache_dir = ".cache/pytest"
 testpaths = ["tests"]
 import_mode = "importlib"
+asyncio_mode = "auto"
 
 [tool.pylint.'MESSAGES CONTROL']
 disable = [

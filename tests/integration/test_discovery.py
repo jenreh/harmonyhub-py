@@ -2,46 +2,45 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from harmonyhub.discovery import discover
+from harmonyhub.discovery import DiscoveredHub, discover
 from harmonyhub.simulator import FakeHub
 
 
 @pytest.mark.asyncio
 async def test_discover_with_fake_hub(fake_hub: FakeHub) -> None:
-    """Discovery can find and provision a simulated FakeHub."""
-    # Mock mDNS to report the FakeHub
-    with patch("harmonyhub.discovery.AsyncZeroconf") as mock_azc_class:
-        mock_azc = MagicMock()
-        mock_azc_class.return_value = mock_azc
-        mock_azc.async_close = __import__("asyncio").coroutine(lambda: None)()
+    """Discovery finds and provisions a FakeHub via simulated subnet scan."""
+    location = f"http://{fake_hub.host}:8088/description.xml"
+    prov = fake_hub.provision_info
 
-        # Create mock service info for FakeHub
-        service_info = MagicMock()
-        service_info.addresses.return_value = [
-            __import__("ipaddress").IPv4Address(fake_hub.host).packed
-        ]
-        service_info.name = f"{fake_hub.friendly_name}._hap._tcp.local."
+    with (
+        # No SSDP responses in test environment
+        patch("harmonyhub.discovery._ssdp_search", new_callable=AsyncMock) as mock_ssdp,
+        # Subnet scan returns the FakeHub's description URL
+        patch("harmonyhub.discovery._subnet_scan", new_callable=AsyncMock) as mock_scan,
+        patch("harmonyhub.discovery._get_local_ip", return_value=fake_hub.host),
+        # FakeHub has no HTTP server; return synthetic provision info
+        patch(
+            "harmonyhub.discovery.fetch_provision_info", new_callable=AsyncMock
+        ) as mock_prov,
+        # Return friendly name from FakeHub's raw provision data
+        patch(
+            "harmonyhub.discovery._fetch_friendly_name", new_callable=AsyncMock
+        ) as mock_name,
+    ):
+        mock_ssdp.return_value = []
+        mock_scan.return_value = [location]
+        mock_prov.return_value = prov
+        mock_name.return_value = prov.raw["friendlyName"]
 
-        mock_azc.zeroconf.get_service_info = MagicMock(return_value=service_info)
+        hubs: list[DiscoveredHub] = []
+        async for hub in discover(timeout=2.0):
+            hubs.append(hub)
 
-        # Mock ServiceBrowser to report the service
-        def mock_service_browser(zc, service_type, listener):
-            listener.add_service(
-                zc, service_type, f"{fake_hub.friendly_name}._hap._tcp.local."
-            )
-
-        with patch(
-            "harmonyhub.discovery.ServiceBrowser", side_effect=mock_service_browser
-        ):
-            hubs = []
-            async for hub in discover(timeout=0.1):
-                hubs.append(hub)
-
-            assert len(hubs) == 1
-            assert hubs[0].host == fake_hub.host
-            assert hubs[0].remote_id == fake_hub.remote_id
-            assert hubs[0].friendly_name == fake_hub.friendly_name
+    assert len(hubs) == 1
+    assert hubs[0].host == fake_hub.host
+    assert hubs[0].remote_id == prov.remote_id
+    assert hubs[0].friendly_name == prov.raw["friendlyName"]
