@@ -28,18 +28,5 @@
                 "duckduckgo-mcp-server"
             ]
         },
-        "claude-context": {
-            // https://github.com/zilliztech/claude-context
-            "command": "npx",
-            "args": [
-                "-y",
-                "@zilliz/claude-context-mcp@latest"
-            ],
-            "env": {
-                "OPENAI_API_KEY": "${input:openai-key}",
-                "MILVUS_ADDRESS": "http://127.0.0.1:19530",
-                "MILVUS_TOKEN": "root:Milvus"
-            }
-        }
     }
 }
