@@ -34,14 +34,12 @@ activities_app = typer.Typer(help="Activity operations", no_args_is_help=True)
 devices_app = typer.Typer(help="Device operations", no_args_is_help=True)
 device_app = typer.Typer(help="Single-device shortcuts", no_args_is_help=True)
 key_app = typer.Typer(help="Logical key dispatch", no_args_is_help=True)
-channel_app = typer.Typer(help="Channel control", no_args_is_help=True)
 config_app = typer.Typer(help="Hub-configuration helpers", no_args_is_help=True)
 
 app.add_typer(activities_app, name="activities")
 app.add_typer(devices_app, name="devices")
 app.add_typer(device_app, name="device")
 app.add_typer(key_app, name="key")
-app.add_typer(channel_app, name="channel")
 app.add_typer(config_app, name="config")
 
 _stderr = Console(stderr=True)
@@ -467,16 +465,18 @@ def key_digit(
 # --------------------------------------------------------------------- channel
 
 
-@channel_app.command("set")
-def channel_set(
-    channel: str = typer.Argument(...),
+@app.command()
+def channel(
+    number: str = typer.Argument(..., help="Channel number to switch to."),
     device: str | None = typer.Option(None, "--device"),
     host: str | None = typer.Option(None, "--host"),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
+    """Switch to a channel number."""
+
     async def _go() -> None:
         async with HarmonyService(host) as service:
-            result = await service.client.set_channel(channel, device=device)
+            result = await service.client.set_channel(number, device=device)
         if json_out:
             _emit_json(result)
         elif not result.success:
