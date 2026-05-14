@@ -48,6 +48,31 @@ Repository = "https://github.com/jenreh/harmonyhub-py"
 [tool.hatch.build.targets.wheel]
 packages = ["harmonyhub"]
 
+[tool.hatch.build.targets.sdist]
+include = [
+    "/harmonyhub",
+    "/docs",
+    "README.md",
+    "pyproject.toml",
+]
+exclude = [
+    ".agents/",
+    ".cache/",
+    ".claude/",
+    ".devcontainer/",
+    ".github/",
+    ".vscode/",
+    "skill/",
+    "spec/",
+    "tests/",
+    ".env",
+    ".gitignore",
+    ".pre-commit-config.yaml",
+    "AGENTS.md",
+    "coverage.xml",
+    "Taskfile.yaml",
+]
+
 [tool.bumpversion]
 commit = false
 current_version = "0.2.0"
