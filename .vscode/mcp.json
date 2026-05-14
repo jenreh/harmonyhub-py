@@ -1,0 +1,45 @@
+{
+    "inputs": [
+        {
+            "type": "promptString",
+            "id": "openai-key",
+            "description": "Enter your OpenAI API Key",
+            "password": true
+        }
+    ],
+    "servers": {
+        "memory": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@modelcontextprotocol/server-memory"
+            ]
+        },
+        "code-reasoning": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@mettamatt/code-reasoning"
+            ]
+        },
+        "duckduckgo": {
+            "command": "uvx",
+            "args": [
+                "duckduckgo-mcp-server"
+            ]
+        },
+        "claude-context": {
+            // https://github.com/zilliztech/claude-context
+            "command": "npx",
+            "args": [
+                "-y",
+                "@zilliz/claude-context-mcp@latest"
+            ],
+            "env": {
+                "OPENAI_API_KEY": "${input:openai-key}",
+                "MILVUS_ADDRESS": "http://127.0.0.1:19530",
+                "MILVUS_TOKEN": "root:Milvus"
+            }
+        }
+    }
+}

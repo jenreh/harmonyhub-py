@@ -1,0 +1,24 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "format",
+			"type": "shell",
+			"command": "task format"
+		},
+		{
+			"label": "task format",
+			"type": "shell",
+			"command": "task format",
+			"isBackground": false,
+			"group": "build"
+		},
+		{
+			"label": "task format",
+			"type": "shell",
+			"command": "task format",
+			"isBackground": false,
+			"group": "build"
+		}
+	]
+}

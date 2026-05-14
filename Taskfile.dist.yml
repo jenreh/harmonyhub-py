@@ -1,0 +1,145 @@
+# https://taskfile.dev
+
+version: "3"
+silent: true
+
+vars:
+  PROJECT: Alloq
+  IMAGE_NAME: alloq
+  RUNNER: uv run
+
+tasks:
+  default:
+    desc: Show available commands
+    cmd: task --list
+
+  # ----------------------------------------------------------------------------
+  # Project Initialization and Dependency Management
+  # ----------------------------------------------------------------------------
+
+  init:
+    desc: Initialize project (install python, sync deps, setup pre-commit)
+    vars:
+      # Extract minimal version from pyproject.toml requires-python line
+      # e.g. 'requires-python = ">=3.12"' -> '3.12'
+      PYTHON_VERSION:
+        sh: |
+          grep 'requires-python' pyproject.toml | sed -E 's/.*>=?([0-9]+\.[0-9]+).*/\1/'
+    cmds:
+      - echo "🐍 Installing Python {{.PYTHON_VERSION}}..."
+      - uv python install {{.PYTHON_VERSION}}
+      - uv python pin {{.PYTHON_VERSION}}
+
+      - echo "📦 Syncing dependencies..."
+      - uv sync
+
+      - echo "🔒 Installing pre-commit hooks..."
+      - uv tool list | grep -q pre-commit || uv tool install pre-commit
+      - uv run pre-commit install
+      - uv run alembic upgrade head
+
+  sync:
+    desc: Install dependencies using uv
+    cmd: uv sync
+
+  # ----------------------------------------------------------------------------
+  # Reflex Application Commands
+  # ----------------------------------------------------------------------------
+
+  run:
+    desc: Start the reflex web application
+    cmd: "{{.RUNNER}} reflex run"
+
+  run:debug:
+    desc: Start the reflex web application with debug logging
+    cmd: "{{.RUNNER}} reflex run --loglevel=debug"
+
+  run:prod:
+    desc: Start the reflex web application in prod mode
+    cmd: "{{.RUNNER}} reflex run --env prod --single-port"
+
+  # ----------------------------------------------------------------------------
+  # Quality Assurance (Tests, Lint, Format)
+  # ----------------------------------------------------------------------------
+
+  test:
+    desc: Run pytests with coverage
+    cmd: "{{.RUNNER}} pytest --cov"
+
+  lint:
+    desc: Run linting with ruff
+    cmd: "{{.RUNNER}} ruff check ."
+
+  format:
+    desc: Format code with ruff
+    cmds:
+      - "{{.RUNNER}} ruff check --fix ."
+      - "{{.RUNNER}} ruff format ."
+
+  clean:
+    desc: Clean cache and build artifacts
+    ignore_error: true
+    cmds:
+      - rm -rf __pycache__/ .cache/ .states/ .web/
+      - find . -type d -name "__pycache__" -exec rm -rf {} +
+      - find . -type f -name "*.pyc" -delete
+
+  # ----------------------------------------------------------------------------
+  # Database Commands (Namespace: db)
+  # ----------------------------------------------------------------------------
+
+  db:revision:
+    desc: |
+      Create new Alembic migration (Usage: task db:revision -- "your message here")
+    cmds:
+      - '{{.RUNNER}} alembic revision -m "{{.CLI_ARGS}}"'
+
+  db:current:
+    desc: Run alembic current (check migration status)
+    cmd: "{{.RUNNER}} alembic current"
+
+  db:history:
+    desc: Show alembic migration history
+    cmd: "{{.RUNNER}} alembic history"
+
+  db:upgrade:
+    desc: Run alembic upgrade head
+    cmd: "{{.RUNNER}} alembic upgrade head"
+
+  db:downgrade:
+    desc: Downgrade database by one revision
+    cmd: "{{.RUNNER}} alembic downgrade -1"
+
+  # ----------------------------------------------------------------------------
+  # Docker Commands (Namespace: docker)
+  # ----------------------------------------------------------------------------
+
+  docker:build:
+    desc: Build Docker image locally
+    cmds:
+      - echo "🔨 Building Docker image {{.IMAGE_NAME}}:latest"
+      - docker build -t {{.IMAGE_NAME}}:latest .
+      - echo "✅ Docker image built successfully"
+
+  docker:test:
+    desc: Run and verify locally built image
+    cmds:
+      - echo "🧪 Testing locally built image {{.IMAGE_NAME}}:latest"
+      - docker compose up --build --watch
+
+  # ----------------------------------------------------------------------------
+  # Release Commands
+  # ----------------------------------------------------------------------------
+
+  release:build:
+    desc: |
+      Usage: task release:build -- [major|minor|patch], defaults to 'patch' if no arg provided.
+      Creates a new release tag, an updated Docker container and publishes the container
+      to Github packages
+    cmds:
+      - uvx bump-my-version bump {{.CLI_ARGS | default "patch"}}
+      - uv sync
+      - git add -A
+      - 'git diff --cached --quiet || git commit -m "chore: release v$(grep ''^version = '' pyproject.toml | cut -d ''"'' -f2)"'
+      - git push
+      - 'gh release create v$(grep ''^version = '' pyproject.toml | cut -d ''"'' -f2) --generate-notes'
