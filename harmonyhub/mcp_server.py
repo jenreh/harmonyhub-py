@@ -1,116 +1,98 @@
-"""FastMCP server exposing Harmony Hub control over stdio.
-
-All log output goes to stderr — stdout is reserved for MCP framing. The host
-defaults to `HARMONY_HUB_HOST` (env or config.toml). A single
-``HarmonyHubClient`` instance is reused across tool calls.
-"""
-
-from __future__ import annotations
-
 import json
 import logging
-import os
 import sys
-from dataclasses import asdict, is_dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
-from harmonyhub.client import HarmonyHubClient
-from harmonyhub.config import load as load_app_config
+from harmonyhub.service import HarmonyService, to_jsonable
 
-logging.basicConfig(level=logging.INFO, stream=sys.stderr)
-_LOG = logging.getLogger("harmonyhub.mcp")
+# Route all logs to stderr — stdout is reserved for the MCP transport.
+logging.basicConfig(
+    stream=sys.stderr,
+    level=logging.INFO,
+    format="%(levelname)s %(name)s: %(message)s",
+)
+_LOG = logging.getLogger("harmony.mcp")
 
-mcp = FastMCP("harmony")
-_client: HarmonyHubClient | None = None
-
-
-def _host() -> str:
-    cfg = load_app_config()
-    host = os.environ.get("HARMONY_HUB_HOST") or cfg.host
-    if not host:
-        raise RuntimeError(
-            "No hub host configured. Set HARMONY_HUB_HOST or [hub].host in config.toml."
-        )
-    return host
-
-
-async def _get_client() -> HarmonyHubClient:
-    global _client
-    if _client is None:
-        _client = HarmonyHubClient(_host(), connection_mode="persistent")
-        await _client.connect()
-    return _client
+mcp = FastMCP(
+    "harmony",
+    instructions=(
+        "Local control of a Logitech Harmony Hub. "
+        "Tools control activities, devices, and channels on the local network. "
+        "Destructive operations (power-off, start-activity) take effect immediately."
+    ),
+)
 
 
-def _jsonable(obj: Any) -> Any:
-    if is_dataclass(obj) and not isinstance(obj, type):
-        return {k: _jsonable(v) for k, v in asdict(obj).items()}
-    if isinstance(obj, (list, tuple)):
-        return [_jsonable(v) for v in obj]
-    if isinstance(obj, dict):
-        return {k: _jsonable(v) for k, v in obj.items()}
-    return obj
+_service: HarmonyService | None = None
 
 
-# ----------------------------------------------------------------------- tools
+async def _get_service() -> HarmonyService:
+    global _service
+    if _service is None:
+        _service = HarmonyService(connection_mode="persistent")
+        await _service.connect()
+    return _service
+
+
+# --------------------------------------------------------------------- tools
 
 
 @mcp.tool()
 async def harmony_get_status() -> dict:
-    """Return current activity, last channel, connection state."""
-    client = await _get_client()
-    return _jsonable(await client.get_status())
+    """Return current activity, last channel (with source), and connection state."""
+    service = await _get_service()
+    return to_jsonable(await service.client.get_status())
 
 
 @mcp.tool()
 async def harmony_list_activities() -> list[dict]:
-    """List all activities defined on the hub."""
-    client = await _get_client()
-    return _jsonable(await client.list_activities())
+    """List all configured Harmony activities."""
+    service = await _get_service()
+    return to_jsonable(await service.client.list_activities())
 
 
 @mcp.tool()
 async def harmony_start_activity(activity: str) -> dict:
-    """Start an activity by name or id. Destructive: powers devices on."""
-    client = await _get_client()
-    return _jsonable(await client.start_activity(activity))
+    """Start an activity by name or id. Destructive: switches the hub immediately."""
+    service = await _get_service()
+    return to_jsonable(await service.client.start_activity(activity))
 
 
 @mcp.tool()
 async def harmony_power_off() -> dict:
-    """Run the PowerOff activity. Destructive."""
-    client = await _get_client()
-    return _jsonable(await client.power_off())
+    """Run the PowerOff activity. Destructive: turns off all devices in the active activity."""
+    service = await _get_service()
+    return to_jsonable(await service.client.power_off())
 
 
 @mcp.tool()
 async def harmony_list_devices() -> list[dict]:
-    """List all devices on the hub."""
-    client = await _get_client()
-    return _jsonable(await client.list_devices())
+    """List all configured Harmony devices."""
+    service = await _get_service()
+    return to_jsonable(await service.client.list_devices())
 
 
 @mcp.tool()
 async def harmony_list_device_commands(device: str) -> list[str]:
-    """List commands available on a device (by id, label, or substring)."""
-    client = await _get_client()
-    return await client.list_device_commands(device)
+    """List all available IR commands for a device (by name or id)."""
+    service = await _get_service()
+    return await service.client.list_device_commands(device)
 
 
 @mcp.tool()
 async def harmony_device_power_on(device: str) -> dict:
-    """Power on a single device (PowerOn or PowerToggle fallback)."""
-    client = await _get_client()
-    return _jsonable(await client.device_power_on(device))
+    """Power on a device (PowerOn → falls back to PowerToggle if enabled)."""
+    service = await _get_service()
+    return to_jsonable(await service.client.device_power_on(device))
 
 
 @mcp.tool()
 async def harmony_device_power_off(device: str) -> dict:
-    """Power off a single device (PowerOff)."""
-    client = await _get_client()
-    return _jsonable(await client.device_power_off(device))
+    """Power off a single device (sends PowerOff)."""
+    service = await _get_service()
+    return to_jsonable(await service.client.device_power_off(device))
 
 
 @mcp.tool()
@@ -118,7 +100,6 @@ async def harmony_send_key(
     key: Literal[
         "volume_up",
         "volume_down",
-        "mute",
         "channel_up",
         "channel_down",
         "digit_0",
@@ -139,68 +120,91 @@ async def harmony_send_key(
     device: str | None = None,
     activity: str | None = None,
 ) -> dict:
-    """Send a logical key (auto-routed via activity routes when device is omitted)."""
-    client = await _get_client()
-    return _jsonable(await client.send_key(key, device=device, activity=activity))
+    """Send a logical key. Routing falls back to TOML activity routes, then auto-resolution."""
+    service = await _get_service()
+    return to_jsonable(
+        await service.client.send_key(key, device=device, activity=activity)
+    )
 
 
 @mcp.tool()
 async def harmony_send_command(device: str, command: str, hold_ms: int = 0) -> dict:
-    """Send a raw IR command to a device. Bypasses logical-key routing."""
-    client = await _get_client()
-    return _jsonable(await client.send_command(device, command, hold_ms=hold_ms))
+    """Send a raw Harmony IR command. Use for vendor-specific buttons not covered by send_key."""
+    service = await _get_service()
+    return to_jsonable(
+        await service.client.send_command(device, command, hold_ms=hold_ms)
+    )
 
 
 @mcp.tool()
 async def harmony_set_channel(channel: str, device: str | None = None) -> dict:
-    """Switch channels (digits_then_enter or change_channel per config)."""
-    client = await _get_client()
-    return _jsonable(await client.set_channel(channel, device=device))
+    """Set a channel (digits_then_enter or change_channel depending on config)."""
+    service = await _get_service()
+    return to_jsonable(await service.client.set_channel(channel, device=device))
 
 
 @mcp.tool()
 async def harmony_refresh_config() -> dict:
-    """Force-refresh the cached hub config."""
-    client = await _get_client()
-    cfg = await client.get_config(refresh=True)
+    """Re-fetch the hub configuration and replace the cache."""
+    service = await _get_service()
+    config = await service.client.get_config(refresh=True)
     return {
-        "activities": len(cfg.activities),
-        "devices": len(cfg.devices),
-        "config_version": cfg.config_version,
+        "activities": len(config.activities),
+        "devices": len(config.devices),
+        "config_version": config.config_version,
     }
 
 
-# ------------------------------------------------------------------- resources
-
-
-@mcp.resource("harmony://activities")
-async def res_activities() -> str:
-    client = await _get_client()
-    return json.dumps(_jsonable(await client.list_activities()))
-
-
-@mcp.resource("harmony://devices")
-async def res_devices() -> str:
-    client = await _get_client()
-    return json.dumps(_jsonable(await client.list_devices()))
-
-
-@mcp.resource("harmony://status")
-async def res_status() -> str:
-    client = await _get_client()
-    return json.dumps(_jsonable(await client.get_status()))
+# --------------------------------------------------------------------- resources
 
 
 @mcp.resource("harmony://config")
-async def res_config() -> str:
-    client = await _get_client()
-    cfg = await client.get_config()
-    return json.dumps(cfg.raw)
+async def resource_config() -> str:
+    service = await _get_service()
+    config = await service.client.get_config()
+    payload = {
+        "activities": to_jsonable(list(config.activities)),
+        "devices": to_jsonable(list(config.devices)),
+        "config_version": config.config_version,
+    }
+    return json.dumps(payload, indent=2, sort_keys=True)
+
+
+@mcp.resource("harmony://activities")
+async def resource_activities() -> str:
+    service = await _get_service()
+    return json.dumps(
+        to_jsonable(await service.client.list_activities()), indent=2, sort_keys=True
+    )
+
+
+@mcp.resource("harmony://devices")
+async def resource_devices() -> str:
+    service = await _get_service()
+    return json.dumps(
+        to_jsonable(await service.client.list_devices()), indent=2, sort_keys=True
+    )
+
+
+@mcp.resource("harmony://status")
+async def resource_status() -> str:
+    service = await _get_service()
+    return json.dumps(
+        to_jsonable(await service.client.get_status()), indent=2, sort_keys=True
+    )
 
 
 def main() -> None:
-    mcp.run()
+    """Console-script entry point: run the MCP server over stdio."""
+    try:
+        mcp.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if _service is not None:
+            import asyncio as _asyncio
 
-
-if __name__ == "__main__":
-    main()
+            try:
+                _asyncio.run(_service.close())
+            except RuntimeError:
+                pass

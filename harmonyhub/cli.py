@@ -107,7 +107,7 @@ def discover(
     ),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Discover Harmony Hubs on the local network via mDNS."""
+    """Discover Harmony Hubs on the local network via SSDP and subnet scan."""
 
     async def _go() -> None:
         from harmonyhub.discovery import discover as discover_hubs
