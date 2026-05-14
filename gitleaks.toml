@@ -23,9 +23,3 @@ fingerprints = [
     # Local development secrets in .env
     #".env:generic-api-key:13",
 ]
-
-[[rules]]
-# Ignore the specific dummy secret if you use Reflex's tutorial templates
-id = "reflex-dummy-secret"
-description = "Ignore Reflex tutorial dummy keys"
-regex = '''(my_secret_key)'''
