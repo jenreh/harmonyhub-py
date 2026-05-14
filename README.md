@@ -302,6 +302,15 @@ honest about what it cannot know:
 If anything outside Harmony changed a device's state, the library will not
 pretend otherwise. Run `harmony status` to inspect what is actually known.
 
+## Documentation
+
+| File                                               | Summary                                                                             |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| [docs/protocol.md](docs/protocol.md)               | Raw WebSocket/HTTP payloads the library uses; reverse-engineered hub wire format.   |
+| [docs/routing.md](docs/routing.md)                 | How logical keys resolve to a target device — precedence rules and config examples. |
+| [docs/skill.md](docs/skill.md)                     | Installation guide for the Claude Code natural-language agent skill.                |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common errors (HTTP 401, timeout, provisioning failures) and fixes.                 |
+
 ## Tests
 
 ```bash
