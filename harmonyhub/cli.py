@@ -50,7 +50,7 @@ _stdout = Console()
 
 def _setup_logging(verbose: bool) -> None:
     logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
+        level=logging.DEBUG if verbose else logging.ERROR,
         stream=sys.stderr,
         format="%(levelname)s %(name)s: %(message)s",
     )

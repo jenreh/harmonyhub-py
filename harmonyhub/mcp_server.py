@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import sys
 from typing import Literal
 
@@ -8,9 +9,11 @@ from mcp.server.fastmcp import FastMCP
 from harmonyhub.service import HarmonyService, to_jsonable
 
 # Route all logs to stderr — stdout is reserved for the MCP transport.
+# Set HARMONY_DEBUG=1 to enable developer-mode logging (DEBUG level).
+_log_level = logging.DEBUG if os.environ.get("HARMONY_DEBUG") == "1" else logging.ERROR
 logging.basicConfig(
     stream=sys.stderr,
-    level=logging.INFO,
+    level=_log_level,
     format="%(levelname)s %(name)s: %(message)s",
 )
 _LOG = logging.getLogger("harmony.mcp")
