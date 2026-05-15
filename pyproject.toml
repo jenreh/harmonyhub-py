@@ -84,6 +84,11 @@ filename = "pyproject.toml"
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
 
+[[tool.bumpversion.files]]
+filename = "README.md"
+search = '![Version](https://img.shields.io/badge/version-{current_version}-blue)'
+replace = '![Version](https://img.shields.io/badge/version-{new_version}-blue)'
+
 [tool.ruff]
 cache-dir = ".cache/ruff"
 indent-width = 4

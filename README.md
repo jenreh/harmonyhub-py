@@ -1,10 +1,8 @@
 # harmonyhub-py
 
-> Local control of the Logitech Harmony Hub — Python library, CLI, and MCP server.
-
-[![Python](https://img.shields.io/badge/python-3.14%2B-blue)](https://www.python.org)
+![Version](https://img.shields.io/badge/version-0.2.2-blue)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
-![Tests](https://img.shields.io/badge/tests-44%20passing-brightgreen)
+[![Python](https://img.shields.io/badge/python-3.14%2B-orange)](https://www.python.org)
 
 **harmonyhub-py** talks directly to your hub over WebSocket on the local network — no Logitech cloud, no account, no internet required after the initial one-time provisioning.
 
