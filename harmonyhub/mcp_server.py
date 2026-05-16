@@ -4,7 +4,7 @@ import os
 import sys
 from typing import Literal
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from harmonyhub.service import HarmonyService, to_jsonable
 
