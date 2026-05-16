@@ -20,7 +20,7 @@ dependencies = [
     "websockets==16.0",
     "typer==0.25.1",
     "pydantic==2.13.4",
-    "fastmcp==3.2.4",
+    "fastmcp>=3.2.4",
     "python-dotenv==1.2.2",
 ]
 
