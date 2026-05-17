@@ -1,6 +1,6 @@
 [project]
 name = "harmonyhub-py"
-version = "0.2.5"
+version = "0.2.6"
 description = "Local control of the Logitech Harmony Hub: library, CLI, and MCP server"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -76,7 +76,7 @@ exclude = [
 
 [tool.bumpversion]
 commit = false
-current_version = "0.2.5"
+current_version = "0.2.6"
 tag = false
 allow-dirty = false
 
