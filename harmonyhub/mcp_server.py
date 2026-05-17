@@ -200,7 +200,7 @@ async def resource_status() -> str:
 def main() -> None:
     """Console-script entry point: run the MCP server over stdio."""
     try:
-        mcp.run()
+        mcp.run(show_banner=False)
     except KeyboardInterrupt:
         pass
     finally:
