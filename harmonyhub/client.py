@@ -167,12 +167,24 @@ class HarmonyHubClient:
         config = _parse_config(data)
         self._config = config
         if self._provision is not None:
+            version = await self._live_config_version(transport)
             cache_path = hub_cache_dir(self._provision.remote_id) / "config.json"
+            envelope: dict[str, Any] = {"data": data}
+            if version is not None:
+                envelope["configVersion"] = version
             try:
-                write_json(cache_path, {"data": data})
+                write_json(cache_path, envelope)
             except OSError as exc:
                 _LOG.warning("Failed to write config cache: %s", exc)
         return config
+
+    async def _live_config_version(self, transport: WebSocketTransport) -> int | None:
+        try:
+            digest_body = await transport.request(_CMD_STATE_DIGEST)
+        except (ProtocolError, HubUnavailableError):
+            return None
+        version = (digest_body.get("data") or {}).get("configVersion")
+        return version if isinstance(version, int) else None
 
     async def _try_cached_config(
         self, transport: WebSocketTransport
@@ -185,18 +197,15 @@ class HarmonyHubClient:
         cached_data = cached_entry.get("data")
         if not isinstance(cached_data, dict):
             cached_data = cached_entry
-        cached_version = cached_data.get("configVersion")
+        cached_version = cached_entry.get("configVersion")
+        if not isinstance(cached_version, int):
+            cached_version = cached_data.get("configVersion")
         if not isinstance(cached_version, int):
             return None
-        try:
-            digest_body = await transport.request(_CMD_STATE_DIGEST)
-        except (ProtocolError, HubUnavailableError):
-            return None
-        digest_data = digest_body.get("data") or {}
-        live_version = digest_data.get("configVersion")
+        live_version = await self._live_config_version(transport)
         if live_version != cached_version:
             return None
-        _LOG.debug("Using cached config (version %d)", cached_version)
+        _LOG.debug("Using cached config (version %s)", cached_version)
         return _parse_config(cached_data)
 
     async def list_activities(self) -> list[Activity]:
@@ -265,15 +274,7 @@ class HarmonyHubClient:
 
     async def get_status(self) -> HubStatus:
         current = await self.get_current_activity()
-        digest_version: int | None = None
-        try:
-            digest_body = await self._require_transport().request(_CMD_STATE_DIGEST)
-            digest_data = digest_body.get("data") or {}
-            version = digest_data.get("configVersion")
-            if isinstance(version, int):
-                digest_version = version
-        except (ProtocolError, HubUnavailableError):
-            digest_version = None
+        digest_version = await self._live_config_version(self._require_transport())
         return HubStatus(
             current_activity=current,
             last_channel=self._state.last_channel,
