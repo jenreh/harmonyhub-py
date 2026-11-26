@@ -62,17 +62,17 @@ async def _post(
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, headers=_hub_headers(), json=payload)
     except httpx.ConnectError as exc:
-        raise HubUnavailableError(
-            f"Cannot connect to hub at {host}:{port}: {exc}"
-        ) from exc
+        detail = str(exc)
+        msg = f"Cannot connect to hub at {host}:{port}"
+        raise HubUnavailableError(f"{msg}: {detail}" if detail else msg) from exc
     except httpx.TimeoutException as exc:
-        raise HubUnavailableError(
-            f"Timeout contacting hub at {host}:{port}: {exc}"
-        ) from exc
+        detail = str(exc)
+        msg = f"Timeout contacting hub at {host}:{port}"
+        raise HubUnavailableError(f"{msg}: {detail}" if detail else msg) from exc
     except httpx.HTTPError as exc:
-        raise HubUnavailableError(
-            f"HTTP error contacting hub at {host}: {exc}"
-        ) from exc
+        detail = str(exc)
+        msg = f"HTTP error contacting hub at {host}:{port}"
+        raise HubUnavailableError(f"{msg}: {detail}" if detail else msg) from exc
 
     if response.status_code != 200:
         raise ProvisioningError(
